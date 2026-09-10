@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Baxter · Remote control</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="page-header">
+    <div class="brand"><span class="brand-icon" aria-hidden="true">B</span><div><p class="eyebrow">PLAYFUL LEARNING</p><h1>Baxter <span>remote control</span></h1></div></div>
+    <div class="connection"><span id="connection-dot" class="dot"></span><div><strong id="connection-status">Connecting</strong><span id="connection-detail">Waiting for robot state</span></div></div>
+  </header>
+
+  <main>
+    <section class="intro"><div><p class="eyebrow">ROBOT WORKSPACE</p><h2>Small moves. Live feedback.</h2><p>Inspect both arms and test one movement at a time.</p></div><span id="simulation-badge" class="badge" hidden>SIMULATED ROBOT</span></section>
+
+    <section class="controls" aria-label="Movement controls">
+      <label class="arm-toggle"><input type="checkbox" id="jog-enabled"><span class="toggle" aria-hidden="true"></span><span><strong>Control buttons</strong><small id="jog-status">Off · monitoring only</small></span></label>
+      <div class="steps"><label>Joint / rotation <span><input id="angle-step" type="number" value="2" min="0.1" max="5" step="0.1"> °</span></label><label>Position <span><input id="position-step" type="number" value="5" min="1" max="20" step="1"> mm</span></label><label>Gripper <span><input id="gripper-step" type="number" value="5" min="1" max="10" step="1"> %</span></label></div>
+      <button id="stop-all" class="stop-button" type="button"><span aria-hidden="true">■</span> Stop all motion</button>
+    </section>
+
+    <div class="activity" role="status" aria-live="polite"><span id="activity-icon" aria-hidden="true">○</span><span id="activity-text">Controls are off. Live state will appear below.</span></div>
+    <p id="robot-warning" class="robot-warning" role="alert" hidden></p>
+    <section class="cameras" aria-label="Robot cameras">
+      <div class="camera-heading"><h3>Wrist cameras</h3><span>Snapshots · about 1 frame / second</span></div>
+      <div id="camera-grid" class="camera-grid"></div>
+      <p class="camera-note">Baxter supports two active cameras at a time. Open the desired cameras on the old desktop; this page does not switch them.</p>
+    </section>
+    <div id="arms" class="arms"></div>
+    <section id="head-controls" class="head-panel" aria-label="Head, lights and display">
+      <div class="head-heading"><h3>Head, lights & display</h3><span>Uses the control toggle above</span></div>
+      <div class="head-layout">
+        <div class="head-settings">
+          <div class="head-readings"><div><span class="gripper-label">Current pan</span><strong id="head-pan" class="reading">—</strong></div><span id="head-status" class="arm-status">Waiting for head state</span></div>
+          <p class="head-note">Tilt angle is not supported. Baxter provides pan and a nod gesture.</p>
+          <div class="head-fields">
+            <label>Pan target / °<input id="head-target" type="number" value="0" min="-79.6" max="79.6" step="0.1"></label>
+            <label>Speed / %<input id="head-speed" type="number" value="25" min="1" max="100" step="1"></label>
+            <button class="head-command" type="button" data-command="pan" data-head-motion="true" disabled>Move head</button>
+            <button class="head-command secondary" type="button" data-command="nod" data-head-motion="true" disabled>Nod once</button>
+          </div>
+          <div class="head-fields head-output-row">
+            <label>Halo red / %<input id="halo-red" type="number" value="0" min="0" max="100" step="1"></label>
+            <label>Halo green / %<input id="halo-green" type="number" value="0" min="0" max="100" step="1"></label>
+            <button class="head-command" type="button" data-command="halo" disabled>Set halo</button>
+          </div>
+          <div class="head-fields">
+            <label>Sonar ring LEDs<select id="sonar-mode"><option value="auto">Automatic</option><option value="on">All on</option><option value="off">All off</option></select></label>
+            <button class="head-command" type="button" data-command="sonar" disabled>Set ring LEDs</button>
+          </div>
+          <p class="head-note">Lights and screen controls do not require fresh head feedback. Display previews below show what will be sent.</p>
+        </div>
+        <div class="screen-settings">
+          <div class="head-fields"><label>Screen color<input id="screen-color" type="color" value="#174b48"></label><button class="head-command" type="button" data-command="color" disabled>Show color</button></div>
+          <div class="screen-upload"><label for="screen-file">Or choose an image</label><input id="screen-file" type="file" accept="image/*"></div>
+          <canvas id="screen-preview" width="1024" height="600" aria-label="Preview of the image to send to Baxter"></canvas>
+          <div class="screen-send"><span id="screen-detail">Choose an image. It will fit within 1024 × 600 on black.</span><button class="head-command" type="button" data-command="image" disabled>Show image</button></div>
+        </div>
+      </div>
+    </section>
+    <footer><span>Positions in the robot base frame. Rotations jog around base-frame axes.</span><span>Readouts use the controller’s cached ROS state.</span><span>Network stop requests use the robot controller. Keep Baxter’s physical stop accessible.</span></footer>
+  </main>
+</body>
+</html>
