@@ -1,0 +1,7 @@
+<launch>
+  <arg name="image" default=""/>
+  <arg name="video" default=""/>
+  <arg name="degrees" default=""/>
+  <arg name="radians" default=""/>
+  <node name="baxter_screen" pkg="baxter_screen" type="BaxterScreen.py" args="image=$(arg image) video=$(arg video) degrees=$(arg degrees) radians=$(arg radians)" output="screen"/>
+</launch>

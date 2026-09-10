@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package>
+  <name>baxter_screen</name>
+  <version>0.0.0</version>
+  <description>Package for showing images and videos on Baxter</description>
+  <maintainer email="delpreto@mit.edu">Joseph DelPreto</maintainer>
+  <license>TODO</license>
+  <author email="delpreto@mit.edu">Joseph DelPreto</author>
+
+
+  <!--<build_depend>message_generation</build_depend>-->
+  <!-- Use buildtool_depend for build tool packages: -->
+  <!--  <buildtool_depend>catkin</buildtool_depend> -->
+  <!-- Use run_depend for packages you need at runtime: -->
+  <!--<run_depend>message_runtime</run_depend>-->
+  <run_depend>rospy</run_depend>
+  <!-- Use test_depend for packages you need only for testing: -->
+  <!--   <test_depend>gtest</test_depend> -->
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>roscpp</build_depend>
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+
+  <export>
+
+  </export>
+</package>

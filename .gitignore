@@ -1,0 +1,17 @@
+
+*.bag
+*.mp4
+*.avi
+*.mpg
+*.jpg
+*.png
+
+*.npy
+*.pyc
+*.*~
+
+ros_ws/install/
+ros_ws/build/
+ros_ws/devel/
+
+**/*archived*/
