@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """JSON/HTTP bridge for Baxter. Standard libraries only; Python 2.7 or 3.
 
-Run with --simulate to try the API without ROS. See README_remote.md.
+Run with --simulate to try the API without ROS. See ../README.md.
 """
 from __future__ import print_function
 
@@ -9,11 +9,9 @@ import argparse
 import base64
 import binascii
 import collections
-import hmac
 import hashlib
 import json
 import math
-import os
 import threading
 import time
 import uuid
@@ -394,20 +392,11 @@ class Handler(BaseHTTPRequestHandler):
         BaseHTTPRequestHandler.setup(self)
         self.connection.settimeout(5)
 
-    def authorized(self):
-        supplied = self.headers.get('Authorization', '')
-        expected = 'Bearer ' + self.server.token
-        compare = getattr(hmac, 'compare_digest', lambda a, b: a == b)
-        return compare(supplied, expected)
-
     def do_GET(self):
         # Images use binary HTTP responses, avoiding base64 overhead in JSON.
         # Never hold the command lock while waiting for or encoding a frame.
         status, content_type = 200, 'image/png'
         try:
-            if not self.authorized():
-                status = 401
-                raise ValueError('Invalid connection token')
             paths = dict(('/camera/' + name + '.png', name) for name in CAMERA_NAMES)
             if self.path not in paths:
                 status = 404
@@ -432,11 +421,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request_id = None
-        status = 200
         try:
-            if not self.authorized():
-                status = 401
-                raise ValueError('Invalid connection token')
             if self.path != '/rpc':
                 raise ValueError('Use POST /rpc')
             size = int(self.headers.get('Content-Length', '0'))
@@ -460,7 +445,7 @@ class Handler(BaseHTTPRequestHandler):
                         'error': {'code': code, 'message': str(exc)}}
         try:
             data = json.dumps(response, allow_nan=False, separators=(',', ':')).encode('utf-8')
-            self.send_response(status)
+            self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'no-store')
@@ -485,9 +470,6 @@ def main():
     parser.add_argument('--simulate', action='store_true', help='No ROS or robot; illustrative motion only')
     parser.add_argument('--lease-timeout', type=float, default=5)
     args = parser.parse_args()
-    token = os.environ.get('BAXTER_REMOTE_TOKEN', '')
-    if not token or not all(ord(c) < 128 for c in token):
-        parser.error('Set BAXTER_REMOTE_TOKEN to a nonempty ASCII connection token')
     if not 2 <= args.lease_timeout <= 120:
         parser.error('--lease-timeout must be between two and 120 seconds')
     # Bind before constructing the controller, which enables/calibrates the robot.
@@ -499,7 +481,6 @@ def main():
         else:
             from remote_robot import BaxterBackend
             backend = BaxterBackend()
-        server.token = token
         server.api = RemoteAPI(backend, args.lease_timeout)
         if not args.simulate:
             import rospy

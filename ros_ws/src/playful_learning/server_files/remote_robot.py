@@ -60,8 +60,10 @@ class BaxterBackend(object):
                 'moving': c.is_gripper_moving(limb),
                 'grasping': c.is_gripper_grasping(limb)}
             worker = c._move_to_joint_angles_rad_thread[limb]
+            client = c._trajectories[limb]._client
+            # Older actionlib logs an error if get_state() has no goal to inspect.
             moving[limb] = bool((worker and worker.is_alive()) or
-                               c._trajectories[limb]._client.get_state() in ACTIVE or
+                               (client.gh is not None and client.get_state() in ACTIVE) or
                                grippers[limb]['moving'])
         age = max(time.time() - self.feedback.get(key, 0)
                   for key in ('joints', 'left', 'right', 'left_gripper', 'right_gripper'))
@@ -96,15 +98,16 @@ class BaxterBackend(object):
 
     def move_joints(self, targets, params, cancel):
         c = self.controller
-        timeout = params.get('timeout_s', 15)
+        timeout = params.get('timeout_s', 30)
         tolerance = params.get('tolerance_rad', 0.008726646)
         targets = copy.deepcopy(targets)
         with self.dispatch_lock:
             if cancel.is_set():
                 raise RuntimeError('Cancelled before movement')
+            started = time.time()
             c.move_to_joint_angles_rad(targets, timeout_s=timeout,
                                        tolerance_rad=tolerance)
-        deadline = time.time() + timeout + 1
+        deadline = started + timeout + 1
         stopping_at = None
         while any(c._move_to_joint_angles_rad_thread[limb].is_alive() for limb in targets):
             if cancel.is_set() or time.time() > deadline:
@@ -114,17 +117,34 @@ class BaxterBackend(object):
                 self.fault = 'Movement worker did not stop; inspect Baxter and restart the server.'
                 raise RuntimeError(self.fault)
             time.sleep(0.02)
-        if cancel.is_set():
-            for limb in targets:
-                c._limbs[limb].set_joint_positions(c._limbs[limb].joint_angles())
-            raise RuntimeError('Cancelled')
-        actual = c.get_joint_angles_rad()
-        for limb, angles in targets.items():
-            if isinstance(angles, list):
-                angles = dict(zip([limb + '_' + j for j in JOINTS], angles))
-            if any(abs(actual[limb][joint] - value) > tolerance for joint, value in angles.items()):
-                raise RuntimeError('%s arm did not reach its joint target' % limb)
-        return targets
+        # Allow feedback to settle after the SDK worker exits. Do not resend motion.
+        motion_elapsed = time.time() - started
+        settle_deadline = time.time() + 0.5
+        while True:
+            if cancel.is_set():
+                for limb in targets:
+                    c._limbs[limb].set_joint_positions(c._limbs[limb].joint_angles())
+                raise RuntimeError('Cancelled')
+            actual = c.get_joint_angles_rad()
+            errors = []
+            for limb, angles in targets.items():
+                if isinstance(angles, list):
+                    angles = dict(zip([limb + '_' + j for j in JOINTS], angles))
+                errors.extend((abs(actual[limb][joint] - value), joint)
+                              for joint, value in angles.items())
+            error, joint = max(errors)
+            if cancel.is_set():
+                continue
+            if stopping_at is None and error <= tolerance:
+                return targets
+            if stopping_at is not None or time.time() >= settle_deadline:
+                elapsed = time.time() - started
+                reason = 'Motion timed out' if stopping_at is not None or motion_elapsed >= timeout else 'Target not reached'
+                raise RuntimeError('%s after %.1f s (timeout %.1f s): %s error %.4f rad (%.2f deg), '
+                                   'tolerance %.4f rad (%.2f deg)' %
+                                   (reason, elapsed, timeout, joint, error, math.degrees(error),
+                                    tolerance, math.degrees(tolerance)))
+            time.sleep(0.02)
 
     def execute(self, method, params, cancel):
         """Execute one approved operation, including its completion check."""

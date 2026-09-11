@@ -2,7 +2,6 @@
 
 import base64
 import json
-import os
 import threading
 import time
 import uuid
@@ -53,15 +52,12 @@ class BaxterRemoteController:
     Optional arguments in **options use the corresponding controller names.
     """
 
-    def __init__(self, server, token=None, request_timeout_s=3, heartbeat=True):
+    def __init__(self, server, request_timeout_s=3, heartbeat=True):
         self.url = server.rstrip("/")
         if not self.url.endswith("/rpc"):
             self.url += "/rpc"
         if not self.url.startswith(("http://", "https://")):
             raise ValueError("Server must start with http:// or https://")
-        self.token = token or os.environ.get("BAXTER_REMOTE_TOKEN")
-        if not self.token:
-            raise ValueError("Set BAXTER_REMOTE_TOKEN or supply token=")
         self.client_id = uuid.uuid4().hex
         self.request_timeout_s = request_timeout_s
         self.heartbeat_error = None
@@ -80,7 +76,6 @@ class BaxterRemoteController:
                            "method": method, "params": params}, allow_nan=False).encode("utf-8")
         request = Request(self.url, data=body, headers={
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + self.token,
             "X-Client-ID": self.client_id,
         })
         try:
@@ -92,8 +87,8 @@ class BaxterRemoteController:
             except (ValueError, UnicodeError):
                 raise RemoteError("HTTP %s: %s" % (error.code, error.reason)) from error
         except (URLError, OSError, ValueError) as error:
-            raise RemoteError("Request failed: %s; a motion command may have been accepted" %
-                              error) from error
+            raise RemoteError("Request to %s failed: %s; a motion command may have been accepted" %
+                              (self.url, error)) from error
         if not isinstance(reply, dict):
             raise RemoteError("Invalid JSON-RPC response")
         if "error" in reply:
@@ -157,7 +152,6 @@ class BaxterRemoteController:
         if self._closed.is_set():
             raise RemoteError("Client is closed")
         request = Request(self.url[:-4] + "/camera/" + camera_name + ".png", headers={
-            "Authorization": "Bearer " + self.token,
             "X-Client-ID": self.client_id,
         })
         try:
@@ -242,7 +236,7 @@ class BaxterRemoteController:
     def is_movement_in_progress(self, limb_name=None):
         return self.call("is_movement_in_progress", limb_name=limb_name)
 
-    def wait_for_movement_completion(self, limb_name=None, timeout_s=15):
+    def wait_for_movement_completion(self, limb_name=None, timeout_s=60):
         """Wait for idle; return False on timeout. Idle does not establish success."""
         deadline = time.monotonic() + timeout_s
         while self.is_movement_in_progress(limb_name):
@@ -253,6 +247,7 @@ class BaxterRemoteController:
         return True
 
     # These return immediately with an Operation, whose .wait() gives the result.
+    # Joint/pose moves default to timeout_s=30 and tolerance_rad=0.008726646.
     def move_to_joint_angles_rad(self, joint_angles_rad_byLimb, **options):
         return self._start("move_to_joint_angles_rad",
                            joint_angles_rad_byLimb=joint_angles_rad_byLimb, **options)

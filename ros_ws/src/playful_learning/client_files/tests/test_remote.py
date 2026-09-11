@@ -4,6 +4,7 @@ from __future__ import print_function
 import threading
 import time
 import unittest
+from unittest.mock import Mock, patch
 
 from BaxterRemoteController_server import RemoteAPI, validate
 from remote_robot import BaxterBackend
@@ -165,6 +166,17 @@ class FinishedWorker(object):
         return False
 
 
+class FakeClock(object):
+    def __init__(self):
+        self.now = 100.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 class FakeController(object):
     def __init__(self):
         self._trajectories = {"left": FakeTrajectory()}
@@ -200,6 +212,60 @@ class RobotAdapterTests(unittest.TestCase):
         self.backend.fault = None
         self.cancel = threading.Event()
 
+    def test_state_checks_trajectory_status_only_when_a_goal_exists(self):
+        from unittest.mock import Mock
+
+        c = self.backend.controller = Mock()
+        c._limbs = {}
+        c._trajectories = {}
+        c._move_to_joint_angles_rad_thread = {}
+        for limb in ('left', 'right'):
+            c._limbs[limb] = Mock()
+            c._limbs[limb].endpoint_pose.return_value = {
+                'position': Mock(x=0.6, y=0.3, z=0.2),
+                'orientation': Mock(w=1.0, x=0.0, y=0.0, z=0.0)}
+            client = Mock(gh=None)
+            client.get_state.side_effect = AssertionError('Queried a client without a goal')
+            c._trajectories[limb] = Mock(_client=client)
+            c._move_to_joint_angles_rad_thread[limb] = None
+        c.get_gripper_position_open_percent.return_value = 100.0
+        c.get_gripper_force_percent.return_value = 0.0
+        c.is_gripper_moving.return_value = False
+        c.is_gripper_grasping.return_value = False
+        c.get_joint_angles_rad.return_value = {}
+        c.get_joint_velocities_rad_s.return_value = {}
+        c.get_joint_efforts_Nm.return_value = {}
+        self.backend.feedback = dict.fromkeys(
+            ('joints', 'left', 'right', 'left_gripper', 'right_gripper'), time.time())
+        self.backend.head = Mock()
+        self.backend.head.get_state.return_value = {}
+
+        # A prepared trajectory is not yet a goal; repeated browser reads stay idle.
+        for unused in range(3):
+            self.assertEqual(self.backend.state()['movement_in_progress'],
+                             {'left': False, 'right': False})
+        for limb in ('left', 'right'):
+            c._trajectories[limb]._client.get_state.assert_not_called()
+
+        client = c._trajectories['left']._client
+        client.gh = object()
+        client.get_state.side_effect = None
+        for status in range(10):
+            client.get_state.return_value = status
+            moving = self.backend.state()['movement_in_progress']
+            self.assertEqual(moving, {'left': status in (0, 1, 6, 7), 'right': False})
+        self.assertEqual(client.get_state.call_count, 10)
+        c._trajectories['right']._client.get_state.assert_not_called()
+
+        # Non-trajectory movement must still be detected when there is no goal.
+        client.gh = None
+        c._move_to_joint_angles_rad_thread['left'] = Mock()
+        c._move_to_joint_angles_rad_thread['left'].is_alive.return_value = True
+        c.is_gripper_moving.side_effect = lambda limb: limb == 'right'
+        self.assertEqual(self.backend.state()['movement_in_progress'],
+                         {'left': True, 'right': True})
+        self.assertEqual(client.get_state.call_count, 10)
+
     def test_replay_rebuilds_goal_instead_of_accumulating_points(self):
         for unused in range(2):
             self.backend.execute("run_trajectory", {"limb_names": ["left"]}, self.cancel)
@@ -214,9 +280,73 @@ class RobotAdapterTests(unittest.TestCase):
             self.assertFalse(self.backend.trajectory_result("left"))
 
     def test_finished_joint_worker_without_target_is_failure(self):
-        with self.assertRaises(RuntimeError):
+        with patch('remote_robot.time', FakeClock()), self.assertRaisesRegex(RuntimeError, 'Target not reached.*left_s0'):
             self.backend.execute("move_to_joint_angles_rad", {
                 "joint_angles_rad_byLimb": {"left": {"left_s0": .5}}}, self.cancel)
+
+    def test_joint_feedback_can_settle_without_resending_motion(self):
+        c = self.backend.controller
+        c.move_to_joint_angles_rad = Mock()
+        c.get_joint_angles_rad = Mock(side_effect=[
+            {'left': {'left_s0': .49}}, {'left': {'left_s0': .495}}])
+        with patch('remote_robot.time', FakeClock()):
+            result = self.backend.move_joints({'left': {'left_s0': .5}}, {}, self.cancel)
+        self.assertEqual(result, {'left': {'left_s0': .5}})
+        c.move_to_joint_angles_rad.assert_called_once_with(
+            result, timeout_s=30, tolerance_rad=0.008726646)
+        self.assertEqual(c.get_joint_angles_rad.call_count, 2)
+
+    def test_custom_motion_limits_and_failure_detail_are_preserved(self):
+        c = self.backend.controller
+        c.move_to_joint_angles_rad = Mock()
+        with patch('remote_robot.time', FakeClock()), self.assertRaisesRegex(
+                RuntimeError, r'Target not reached.*timeout 90.0 s.*left_s0 error 0.5000 rad.*tolerance 0.0010 rad'):
+            self.backend.move_joints({'left': {'left_s0': .5}},
+                                     {'timeout_s': 90, 'tolerance_rad': .001}, self.cancel)
+        c.move_to_joint_angles_rad.assert_called_once_with(
+            {'left': {'left_s0': .5}}, timeout_s=90, tolerance_rad=.001)
+        self.assertIsNone(self.backend.fault)
+        # A normal target miss does not prevent a subsequent command.
+        self.backend.move_joints({'left': {'left_s0': 0}}, {}, self.cancel)
+
+    def test_cancel_during_feedback_settling_is_not_success(self):
+        c = self.backend.controller
+        c._limbs = {'left': Mock()}
+        clock = FakeClock()
+        def read_angles():
+            if clock.now > 100:
+                self.cancel.set()
+                return {'left': {'left_s0': .5}}
+            return {'left': {'left_s0': .49}}
+        c.get_joint_angles_rad = read_angles
+        with patch('remote_robot.time', clock), self.assertRaisesRegex(RuntimeError, 'Cancelled'):
+            self.backend.move_joints({'left': {'left_s0': .5}}, {}, self.cancel)
+        c._limbs['left'].set_joint_positions.assert_called_once()
+
+    def test_sdk_timeout_reports_elapsed_time_and_target_error(self):
+        clock = FakeClock()
+        self.backend.controller.move_to_joint_angles_rad = Mock(side_effect=lambda *a, **k: clock.sleep(2))
+        with patch('remote_robot.time', clock), self.assertRaisesRegex(RuntimeError, 'Motion timed out.*timeout 2.0 s.*left_s0'):
+            self.backend.move_joints({'left': {'left_s0': .5}}, {'timeout_s': 2}, self.cancel)
+        self.assertIsNone(self.backend.fault)
+
+    def test_watchdog_stop_cannot_turn_into_success_at_the_target(self):
+        c = self.backend.controller
+        worker = c._move_to_joint_angles_rad_thread['left'] = Mock()
+        worker.is_alive.side_effect = lambda: not self.backend.stop.called
+        self.backend.stop = Mock()
+        with patch('remote_robot.time', FakeClock()), self.assertRaisesRegex(RuntimeError, 'Motion timed out'):
+            self.backend.move_joints({'left': {'left_s0': 0}}, {'timeout_s': .1}, self.cancel)
+        self.backend.stop.assert_called_once_with(['left'])
+        self.assertIsNone(self.backend.fault)
+
+    def test_worker_that_ignores_stop_still_sets_a_fault(self):
+        self.backend.controller._move_to_joint_angles_rad_thread['left'] = Mock()
+        self.backend.controller._move_to_joint_angles_rad_thread['left'].is_alive.return_value = True
+        self.backend.stop = Mock()
+        with patch('remote_robot.time', FakeClock()), self.assertRaisesRegex(RuntimeError, 'Movement worker did not stop'):
+            self.backend.move_joints({'left': {'left_s0': .5}}, {'timeout_s': .1}, self.cancel)
+        self.assertIsNotNone(self.backend.fault)
 
     def test_cancelled_ik_never_starts_delayed_motion(self):
         errors = []

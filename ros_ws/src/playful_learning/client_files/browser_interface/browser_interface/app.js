@@ -1,6 +1,6 @@
 "use strict";
 
-// This page only talks to the local demo's /rpc proxy. Credentials stay in Python.
+// This page only talks to the local demo's /rpc proxy.
 const arms = document.getElementById("arms");
 const jogEnabled = document.getElementById("jog-enabled");
 const jogStatus = document.getElementById("jog-status");
@@ -16,6 +16,7 @@ let lastStateAt = 0;
 let connected = false;
 let commandPending = false;
 let operationId = null;
+let awaitingState = false;
 let requestNumber = 0;
 let commandVersion = 0;
 let screenImageReady = false;
@@ -121,6 +122,15 @@ for (const limb of ["left", "right"]) {
     view.gripperForce = element("span", "reading gripper-reading", "—", force);
     view.gripperForceBar = element("span", "", undefined, element("div", "gripper-meter gripper-force", undefined, force));
     addJogButtons(gripperContent, limb, "gripper");
+    const gripperActions = element("div", "gripper-actions", undefined, gripper);
+    for (const [action, label] of [["open", "Open (100%)"], ["close", "Close (0%)"]]) {
+        const button = element("button", "gripper-button", label, gripperActions);
+        button.type = "button";
+        button.disabled = true;
+        button.dataset.limb = limb;
+        button.dataset.gripperAction = action;
+        button.setAttribute("aria-label", label + " " + limb + " gripper");
+    }
 }
 
 async function rpc(method, params) {
@@ -158,11 +168,13 @@ function updateControls() {
     const fresh = connected && Date.now() - lastStateAt < 1500;
     const feedbackStale = !!(state && state.feedback_stale);
     const fault = state && state.fault;
-    const busy = commandPending || operationId !== null || !!(state && state.commands_busy);
+    const robotMoving = !!(state && (Object.values(state.movement_in_progress || {}).some(Boolean) ||
+        state.head && (state.head.panning || state.head.nodding)));
+    const busy = commandPending || operationId !== null || awaitingState || robotMoving || !!(state && state.commands_busy);
     if (feedbackStale || fault) jogEnabled.checked = false;
     jogEnabled.disabled = !fresh || feedbackStale || !!fault;
     const canJog = jogEnabled.checked && fresh && !feedbackStale && !fault && !busy;
-    for (const button of document.querySelectorAll(".jog-button, .pose-button")) button.disabled = !canJog;
+    for (const button of document.querySelectorAll(".jog-button, .pose-button, .gripper-button")) button.disabled = !canJog;
     const headFresh = state && state.head && !state.head.feedback_stale && Number.isFinite(state.head.pan_rad);
     for (const button of document.querySelectorAll(".head-command")) {
         button.disabled = !canJog || (button.dataset.headMotion === "true" && !headFresh) ||
@@ -194,6 +206,7 @@ function number(value, digits) {
 
 function updateState(next) {
     state = next;
+    awaitingState = false;
     connected = true;
     lastStateAt = Date.now();
     connectionStatus.textContent = "Connected";
@@ -252,10 +265,15 @@ jogEnabled.addEventListener("change", () => {
 });
 
 arms.addEventListener("click", async event => {
-    const button = event.target.closest(".jog-button, .pose-button");
+    const button = event.target.closest(".jog-button, .pose-button, .gripper-button");
     if (!button || button.disabled) return;
     updateControls();
     if (button.disabled) return;
+    if (button.dataset.gripperAction) {
+        await sendCommand(button.dataset.gripperAction + "_gripper", {limb_name: button.dataset.limb},
+            button.dataset.limb + " gripper " + button.dataset.gripperAction);
+        return;
+    }
     if (button.dataset.pose) {
         await sendCommand("move_to_" + button.dataset.pose, {limb_name: button.dataset.limb},
             button.dataset.limb + " arm to " + button.dataset.pose + " pose");
@@ -445,8 +463,9 @@ async function poll() {
             // A stop request can replace the operation while this read is in flight.
             if (operationId === id && ["succeeded", "failed", "cancelled"].includes(operation.status)) {
                 operationId = null;
+                // Wait for a state read after completion before enabling another command.
+                awaitingState = true;
                 if (operation.status === "failed") {
-                    jogEnabled.checked = false;
                     const error = operation.error;
                     showActivity("Command failed: " + (typeof error === "string" ? error : error && error.message || "See the server log."), true);
                 } else {

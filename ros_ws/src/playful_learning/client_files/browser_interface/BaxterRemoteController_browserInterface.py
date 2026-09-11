@@ -1,30 +1,34 @@
-"""Serve the browser demo on the NEW computer. Python 3.8+, no packages."""
+"""Serve Baxter's browserInterface on the NEW computer. Python 3.8+, no packages."""
 import argparse
 import json
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# Keep the importable client beside the sample, one folder above this interface.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from BaxterRemoteController_client import BaxterRemoteController
 
-ASSETS = Path(__file__).resolve().parent / 'demo'
+ASSETS = Path(__file__).resolve().parent / 'browser_interface'
 CAMERAS = ('left_hand_camera', 'right_hand_camera')
 
 
 class Handler(BaseHTTPRequestHandler):
     def respond(self, status, content_type, data):
-        self.send_response(status)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy',
-                         "default-src 'self'; img-src 'self' blob:; "
-                         "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
-        self.end_headers()
         try:
+            self.send_response(status)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Content-Security-Policy',
+                             "default-src 'self'; img-src 'self' blob:; "
+                             "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")
+            self.end_headers()
             self.wfile.write(data)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except ConnectionError:
+            # The browser disconnected, for example after a refresh or timeout.
+            self.close_connection = True
 
     def do_GET(self):
         if self.path.startswith('/camera/'):
@@ -36,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
             if (self.headers.get('Host') not in hosts or
                     self.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none') or
                     self.headers.get('Origin') not in [None] + ['http://' + h for h in hosts]):
-                return self.respond(403, 'application/json', b'{"message":"Use the local demo page"}')
+                return self.respond(403, 'application/json', b'{"message":"Use the local browserInterface page"}')
             try:
                 data = self.server.client.get_camera_frame(camera_name)
             except Exception as exc:
@@ -61,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
             if (self.headers.get('Host') not in hosts or
                     self.headers.get('Origin') not in ['http://' + h for h in hosts] or
                     self.headers.get('Content-Type', '').split(';')[0] != 'application/json'):
-                return self.respond(403, 'text/plain', b'Use the local demo page')
+                return self.respond(403, 'text/plain', b'Use the local browserInterface page')
             if self.path != '/rpc':
                 return self.respond(404, 'text/plain', b'Not found')
             length = int(self.headers.get('Content-Length', '0'))
@@ -84,13 +88,15 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--server', required=True, help='Baxter desktop URL, e.g. http://192.168.1.50:8765')
-    parser.add_argument('--port', type=int, default=8000)
+    parser.add_argument('--port', type=int, default=8000,
+                        help='Local browser port (default: 8000); put the Baxter port in --server')
     args = parser.parse_args()
     # Browser polling renews the lease; closing the page must let it expire.
     with BaxterRemoteController(args.server, heartbeat=False) as client:
         server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
         server.client = client
-        print('Open http://127.0.0.1:%s on this computer.' % args.port)
+        print('Baxter server: %s' % client.url)
+        print('Open http://127.0.0.1:%s on this computer.' % server.server_port)
         try:
             server.serve_forever(poll_interval=0.2)
         except KeyboardInterrupt:

@@ -1,18 +1,23 @@
 # Baxter remote control
 
 The old desktop runs a Python 2.7 JSON/HTTP server next to BaxterController. The
-new computer runs the Python 3.8+ client or browser demo. The transport and browser
-demo use the standard library, with no package installation or internet connection
+new computer runs the Python 3.8+ client or browserInterface. The transport and
+browserInterface use the standard library, with no package installation or internet connection
 required. Only the old desktop needs the existing ROS/Baxter SDK installation.
 The optional Python image-file helper uses Pillow on the new computer.
 
 ```
 Python client ------------------ JSON/HTTP ------ old desktop ----- ROS ----- Baxter
-Browser -- localhost demo proxy -- JSON/HTTP -----/
+Browser -- localhost HTTP proxy -- JSON/HTTP -----/
 ```
 
 The browser files are local, including their styling and JavaScript. The proxy
-runs on the new computer and keeps the robot access token out of browser code.
+runs on the new computer and forwards requests to the old desktop.
+
+There is no password or token to configure. Anyone who can reach the old
+desktop's HTTP port can read state, view cameras, and send robot commands.
+Use this service on a trusted private LAN; do not forward its port to the internet.
+HTTP traffic is unencrypted.
 
 ## Files and compatibility
 
@@ -20,12 +25,12 @@ runs on the new computer and keeps the robot access token out of browser code.
 | --- | --- | --- |
 | `BaxterRemoteController_server.py` | HTTP API, validation, operation tracking, control lease | 2.7 or 3.8+ |
 | `remote_robot.py` | Adapter for the existing controller and Baxter SDK | 2.7 |
-| `remote_simulation.py` | Hardware-free backend for trying the client/demo | 2.7 or 3.8+ |
+| `remote_simulation.py` | Hardware-free backend for trying the client/interface | 2.7 or 3.8+ |
 | `BaxterCameras.py` | Read camera topics and encode PNG frames without image packages | 2.7 or 3.8+ |
 | `BaxterHeadController.py` | Head motion, halo/sonar lights, and RGB screen output | 2.7 |
 | `BaxterRemoteController_client.py` | Importable client and operation waits | 3.8+ |
 | `sample_remote_client.py` | Short programmatic example | 3.8+ |
-| `BaxterRemoteController_demo.py`, `demo/` | Local browser server and interface | 3.8+ |
+| `browser_interface/BaxterRemoteController_browserInterface.py`, `browser_interface/browser_interface/` | Local browser server and assets, inside `client_files/` | 3.8+ |
 
 `BaxterController.py`, `BaxterTrajectory.py`, and `helpers.py` are unchanged. The
 adapter confines necessary access to the controller's private SDK objects to one
@@ -35,25 +40,51 @@ running another program that commands the same robot.
 
 ## 1. Copy the files
 
-Keep this folder together during development. For the old desktop, the required
-new files are `BaxterRemoteController_server.py`, `remote_robot.py`,
-`remote_simulation.py`, `BaxterCameras.py`, and `BaxterHeadController.py`; put them beside its existing `BaxterController.py`,
-`BaxterTrajectory.py`, and `helpers.py`, for example in
-`~/ros_ws/src/playful_learning`.
+The project is arranged as follows. Copy the contents of `server_files/` to the
+old desktop; keep `client_files/` on the new computer. The tests are optional for
+normal client use.
 
-From PowerShell in this folder, with the destination folder already present:
+```text
+playful_learning/
+  README.md
+  server_files/
+    BaxterRemoteController_server.py
+    BaxterController.py
+    BaxterTrajectory.py
+    helpers.py
+    remote_robot.py
+    remote_simulation.py
+    BaxterCameras.py
+    BaxterHeadController.py
+  client_files/
+    BaxterRemoteController_client.py
+    sample_remote_client.py
+    browser_interface/
+      BaxterRemoteController_browserInterface.py
+      browser_interface/
+        index.html
+        app.js
+        style.css
+    tests/
+```
+
+From PowerShell in `playful_learning/` (beside this README), with the destination
+folder already present:
 
 ```powershell
-scp .\BaxterRemoteController_server.py .\remote_robot.py .\remote_simulation.py .\BaxterCameras.py .\BaxterHeadController.py USER@OLD_DESKTOP:~/ros_ws/src/playful_learning/
+scp .\server_files\*.py USER@OLD_DESKTOP:~/ros_ws/src/playful_learning/
 ```
 
 Replace `USER` and `OLD_DESKTOP` with the old desktop's account and router-facing
-IP address. USB transfer works equally well if SSH is unavailable.
+IP address. USB transfer works equally well if SSH is unavailable. This copies
+all eight server modules, including the three original controller modules, into
+one folder on the old desktop. If you instead copy the `server_files/` folder
+itself, change into that folder before starting the server.
 
-On the new computer, keep `BaxterRemoteController_client.py`,
-`sample_remote_client.py`, `BaxterRemoteController_demo.py`, and `demo/` in the
-same folder. Copy the server, simulator, and `BaxterCameras.py` there too if you want to try simulation.
-The original robot modules are unnecessary on the client computer.
+On the new computer, preserve the `client_files/` layout above so the browser
+launcher can find the client and its assets. For simulation or regression tests,
+also keep `server_files/` beside `client_files/`. The original robot modules are
+unnecessary when connecting the client to the real server.
 
 Use the controller modules from this same project revision on the old desktop;
 the adapter reads a few SDK/controller internals. No edits to those modules are
@@ -63,32 +94,7 @@ These scripts run directly with Python. No new catkin package, `catkin_make`,
 `rosrun` registration, or ROS installation on the new computer is required. The
 old desktop's existing Baxter packages still need their usual working workspace.
 
-## 2. Choose a shared access token
-
-Generate a token on the new computer once:
-
-```powershell
-python -c "import secrets; print(secrets.token_hex(24))"
-```
-
-Use that same value in the server and client terminals. In PowerShell:
-
-```powershell
-$env:BAXTER_REMOTE_TOKEN = 'PASTE_THE_GENERATED_TOKEN'
-```
-
-In Bash on either computer:
-
-```bash
-export BAXTER_REMOTE_TOKEN='PASTE_THE_GENERATED_TOKEN'
-```
-
-The service uses HTTP, so the token and commands travel unencrypted. Use a trusted
-private LAN and do not forward port 8765 through the router to the internet. An
-SSH tunnel can add encryption if one is already available; bind the server to
-`127.0.0.1` in that case.
-
-## 3. Start the old desktop's ROS environment and server
+## 2. Start the old desktop's ROS environment and server
 
 Find the old desktop's address on the shared router with `ip addr`. For example,
 it might be `192.168.1.50`. This can differ from the interface used to communicate
@@ -114,7 +120,6 @@ In a second old-desktop terminal:
 cd ~/ros_ws
 ./baxter.sh
 rostopic echo -n 1 /robot/state
-export BAXTER_REMOTE_TOKEN='PASTE_THE_GENERATED_TOKEN'
 cd ~/ros_ws/src/playful_learning
 python2.7 -B BaxterRemoteController_server.py --host 192.168.1.50 --port 8765
 ```
@@ -136,41 +141,30 @@ sudo ufw allow from 192.168.1.60 to 192.168.1.50 port 8765 proto tcp
 No internet access or package download is involved. Router guest networks or WiFi
 client isolation can prevent two computers on the router from communicating.
 
-## 4. Run the Python client
+## 3. Run the Python client
 
-In a terminal on the new computer, change to the copied client folder and set
-`BAXTER_REMOTE_TOKEN` as above, then run:
+In a terminal on the new computer, change to `playful_learning/client_files/`.
 
-```powershell
-python sample_remote_client.py --server http://192.168.1.50:8765
-```
-
-The default sample only reads robot state. To run the explicitly marked movement
-examples after checking the robot workspace:
+First edit `SERVER_URL` in `sample_remote_client.py` to the old desktop's address
+and port, for example `"http://192.168.0.180:8765"`. Then run:
 
 ```powershell
-python sample_remote_client.py --server http://192.168.1.50:8765 --motion --limb left
+py sample_remote_client.py
 ```
 
-Add `--images` to save snapshots from available cameras. This writes or replaces
-`left_hand_camera.png` and `right_hand_camera.png` in the
-current directory. Inactive cameras print an error and are skipped:
+The sample is a linear sequence of API calls with no command-line arguments.
+**Running it moves the robot:** joint, endpoint, gripper, trajectory, and head-pan
+examples start from current feedback and request small changes. It also reads
+the cameras, nods the head, sets lights, and updates the screen. Check the robot
+workspace and read the sample before running it.
 
-```powershell
-python sample_remote_client.py --server http://192.168.1.50:8765 --images
-```
+Neutral/resting poses and fully opening/closing the gripper are commented
+examples because they can make large movements. Unsupported head tilt and the
+optional Pillow image-file helper are also shown as comments. Active calls wait
+for completion; a failed command raises an error and ends the sample.
 
-Use `--head` independently of `--motion` to test a head-pan command, nod, lights,
-and a screen color. `--screen-image FILE` displays a local image using the optional
-Pillow helper:
-
-```powershell
-python sample_remote_client.py --server http://192.168.1.50:8765 --head
-python sample_remote_client.py --server http://192.168.1.50:8765 --screen-image picture.png
-```
-
-On Linux/macOS use `python3` in place of `python` when needed. The client requires
-Python 3.8 or newer. Both scripts provide `--help`.
+On Linux/macOS use `python3` in place of `py`. The client requires Python 3.8 or
+newer; the browser launcher provides `--help`.
 
 Using the object from your own program:
 
@@ -180,7 +174,7 @@ from BaxterRemoteController_client import BaxterRemoteController
 with BaxterRemoteController("http://192.168.1.50:8765") as robot:
     angles = robot.get_joint_angles_rad()
     operation = robot.move_to_joint_angles_rad({"left": angles["left"]})
-    reached_targets = operation.wait(timeout_s=30)
+    reached_targets = operation.wait()
     print(robot.get_end_effector_poses())
 ```
 
@@ -206,7 +200,7 @@ by name. The server rejects unknown methods and unsupported arguments.
 | The two `build_trajectory_...(...)` methods | Build result; waits internally |
 | `trajectory_succeeded(limb_name)` | `True`, `False`, or `None` when no completed result exists |
 | `abort_movement(limb_name=None)`, `stop_gripper(limb_name)` | Cancellation acknowledgement |
-| `wait_for_movement_completion(limb_name=None, timeout_s=15)` | `True` for idle, `False` on timeout |
+| `wait_for_movement_completion(limb_name=None, timeout_s=60)` | `True` for idle, `False` on timeout |
 
 `operation.status()` returns its state and any result/error. `operation.wait()`
 returns the successful result, raises `RemoteError` for failure/cancellation, and
@@ -214,6 +208,28 @@ raises `TimeoutError` if its deadline expires. A network or wait timeout **does
 not cancel motion**. Commands are never automatically retried: a lost response
 can mean a command was accepted. Use the operation ID/status when available, or
 read state and explicitly request cancellation before deciding what to do next.
+
+Neutral/resting, joint-angle, end-effector, and joint/endpoint jog moves share
+the same completion check. They allow **30 seconds** by default and require each
+requested joint to be within **0.008726646 radians (0.5 degrees)** of its target.
+After the motion worker ends, the server allows up to 0.5 seconds for feedback
+to settle, without sending another motion command. A target miss reports the
+elapsed time, configured timeout, worst joint error, and tolerance. Looking close
+to the requested pose does not necessarily mean every joint reached that tolerance.
+
+For a slower or longer move, pass an explicit motion timeout. The client wait
+timeout is separate: both `operation.wait()` and `wait_for_movement_completion()`
+default to 60 seconds. Give the client enough time to receive the motion result:
+
+```python
+motion = robot.move_to_resting("left", timeout_s=60, tolerance_rad=0.008726646)
+motion.wait(timeout_s=65)
+```
+
+The client's `request_timeout_s` (default 3 seconds) applies to each HTTP request,
+not the whole movement. Motion requests return an operation ID promptly; waiting
+polls that ID. Trajectories use their waypoint timing; head and gripper commands
+retain their separate timeouts.
 
 An idle arm alone does not establish that its commanded target was reached;
 prefer the specific operation's result. Stop acknowledgements mean a stop was
@@ -225,7 +241,7 @@ is one active operation at a time, including IK and trajectory preparation;
 conflicting commands receive a busy error. A single operation may target both
 arms. State reads remain available while motion is running. Cancelling one arm
 of an active two-arm operation cancels that entire operation.
-Any authenticated client can request a stop, even while another client owns
+Any connected client can request a stop, even while another client owns
 control; only the owner can release its control lease.
 
 The client sends a heartbeat every second. If the owner stops communicating for
@@ -316,9 +332,9 @@ left_png = cameras.get_wrist_camera_frame("left")
 `right_hand_camera`. Head-camera requests are rejected. Every getter returns PNG **bytes**, ready to save or display;
 it does not return a pixel array. A modern client application can optionally use
 its preferred image library to decode those bytes. No image library is required
-to save files or use the browser demo.
+to save files or use the browserInterface.
 
-Frames use authenticated HTTP `GET /camera/<camera_name>.png` separately from
+Frames use HTTP `GET /camera/<camera_name>.png` separately from
 JSON-RPC. The old desktop waits up to one second for a ROS image on the camera's
 `/cameras/<camera_name>/image` topic and encodes it with the standard library.
 No `cv_bridge`, OpenCV, Pillow, new catkin dependency, or package installation is
@@ -387,15 +403,25 @@ The browser handles file decoding and resizing itself with canvas, so browser
 uploads need no Pillow installation. The old desktop uses only its existing ROS
 packages and Python's standard library for all head and display functions.
 
-## 5. Run the browser demo on the new computer
+## 4. Run the browserInterface on the new computer
 
-In a terminal with `BAXTER_REMOTE_TOKEN` set:
+In a terminal in `playful_learning/client_files/` on the new computer:
 
 ```powershell
-python BaxterRemoteController_demo.py --server http://192.168.1.50:8765 --port 8000
+python browser_interface/BaxterRemoteController_browserInterface.py --server http://192.168.1.50:8765 --port 8000
 ```
 
-Open **http://127.0.0.1:8000** in a browser on that computer. The demo server binds
+On Windows, use `py` instead of `python` if that is your Python launcher.
+The two ports serve different purposes: `:8765` in `--server` is the old
+desktop's HTTP port; `--port 8000` is the browserInterface's local port on the new
+computer. Include the server port explicitly: `http://192.168.1.50` alone uses
+port 80. Substitute your old desktop's actual address, for example:
+
+```powershell
+py browser_interface/BaxterRemoteController_browserInterface.py --server http://192.168.0.180:8765 --port 8000
+```
+
+Open **http://127.0.0.1:8000** in a browser on that computer. The browser server binds
 only to localhost. The page displays each arm's joint angles and
 torques, end-effector position/orientation, and gripper position/force/status.
 It provides individual jog buttons for joints, Cartesian translation, base-axis
@@ -403,6 +429,14 @@ rotation, and grippers, plus Neutral and Resting pose buttons for each arm and a
 stop control. Enable the Control buttons toggle to use them; each pose button
 moves only its arm and waits for the current command to finish before another
 can be sent. Trajectory building remains in the Python API.
+Each gripper also has **Open (100%)** and **Close (0%)** buttons alongside its
+jog controls. These use the same control toggle and wait for each operation to finish.
+
+After an ordinary command failure, the error stays visible and controls become
+available again once a subsequent state update confirms fresh, idle, fault-free
+feedback. A disconnect, stale feedback, controller fault, or unknown command
+status still turns the control toggle off. Failed commands are never retried
+automatically.
 
 Two camera cards show both wrists, refreshing available frames
 about once per second. A closed camera is marked unavailable; the other images
@@ -418,19 +452,22 @@ the browser, or its control lease will cause busy/ownership errors.
 
 ## Try everything without Baxter
 
-Copy the server, simulator, `BaxterCameras.py`, client, sample, demo script, and `demo/` to the new
-computer. Set the token in each terminal. In the first terminal:
+On the new computer, keep `server_files/` and `client_files/` beside each other,
+as in the layout above. In the first terminal, from `playful_learning/`:
 
 ```powershell
-python BaxterRemoteController_server.py --simulate --host 127.0.0.1 --port 8765
+python server_files/BaxterRemoteController_server.py --simulate --host 127.0.0.1 --port 8765
 ```
 
-In another terminal:
+In another terminal, from `playful_learning/client_files/`:
 
 ```powershell
-python sample_remote_client.py --server http://127.0.0.1:8765 --motion
-python BaxterRemoteController_demo.py --server http://127.0.0.1:8765 --port 8000
+python browser_interface/BaxterRemoteController_browserInterface.py --server http://127.0.0.1:8765 --port 8000
 ```
+
+To run the Python sample against this simulator, set its `SERVER_URL` to
+`"http://127.0.0.1:8765"` and run `python sample_remote_client.py`. Close the sample
+before issuing commands in the browser so the two clients do not compete for control.
 
 Open http://127.0.0.1:8000. Simulation requires neither ROS nor Baxter modules.
 Its pose/IK behavior is illustrative and does not model Baxter's physics,
@@ -448,15 +485,23 @@ operations receive cancellation. The browser shows stale feedback separately
 from a lost HTTP connection. A cancellation that cannot be acknowledged latches
 a controller fault; inspect the robot and restart the server before continuing.
 
-To run the included hardware-free regression checks from this folder:
+To run the included hardware-free regression checks on the new computer,
+from `playful_learning/` (the parent of `client_files/`):
 
 ```bash
-python -B -m unittest -v test_remote test_cameras test_head_controller test_head_remote
+python -B client_files/tests/run_tests.py
 ```
 
 - **Connection refused or timed out:** confirm the server is running, use its
-  router-facing IP and port, check the firewall, and check router client isolation.
-- **Unauthorized:** set identical `BAXTER_REMOTE_TOKEN` values in both terminals.
+  router-facing IP and port (including `:8765` in `--server`), check the firewall,
+  and check router client isolation. On Windows, test reachability with
+  `Test-NetConnection 192.168.0.180 -Port 8765` in PowerShell, substituting the
+  actual address.
+- **WinError 10053 when the browserInterface writes a response:** the local browser connection
+  was aborted before the response could be delivered. This does not identify
+  why the Baxter connection failed. The browserInterface handles this disconnect
+  quietly; restart it after copying the updated client files. If the page reports
+  a connection error, verify the server URL and port as above.
 - **Busy or another owner:** finish/cancel the active operation and close the
   other client, or wait for its five-second lease to expire after it disconnects.
 - **ROS initialization waits:** verify `rostopic echo -n 1 /robot/state` works and
@@ -464,7 +509,7 @@ python -B -m unittest -v test_remote test_cameras test_head_controller test_head
 - **IK or target failure:** inspect the returned error and current pose before
   choosing another target. Do not automatically replay failed movement commands.
 
-Stop/release control from the client, then press Ctrl+C in the demo/server
+Stop/release control from the client, then press Ctrl+C in the browser/server
 terminals. The remote service requests cancellation on shutdown. It does not
 provide remote enabling/disabling methods. For the existing explicit disable
 command, use the old desktop's configured ROS terminal:

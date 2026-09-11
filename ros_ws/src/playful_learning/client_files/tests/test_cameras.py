@@ -164,14 +164,14 @@ class CameraHttpTests(unittest.TestCase):
                 return image_to_png(Image())
         camera_waiting, release_camera, camera_done = (threading.Event() for unused in range(3))
         server = Server(("127.0.0.1", 0), Handler)
-        server.api, server.token = RemoteAPI(Backend()), "test-token"
+        server.api = RemoteAPI(Backend())
         worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=.02))
         worker.daemon = True
         worker.start()
         def get_image():
             connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
             try:
-                connection.request("GET", "/camera/left_hand_camera.png", headers={"Authorization": "Bearer test-token"})
+                connection.request("GET", "/camera/left_hand_camera.png")
                 connection.getresponse().read()
             finally:
                 connection.close()
@@ -185,8 +185,7 @@ class CameraHttpTests(unittest.TestCase):
                 connection = HTTPConnection("127.0.0.1", server.server_port, timeout=1)
                 try:
                     body = json.dumps({"jsonrpc": "2.0", "id": method, "method": method, "params": {}})
-                    connection.request("POST", "/rpc", body, headers={
-                        "Authorization": "Bearer test-token", "X-Client-ID": "test-client"})
+                    connection.request("POST", "/rpc", body, headers={"X-Client-ID": "test-client"})
                     response = connection.getresponse()
                     result = json.loads(response.read().decode("utf-8"))
                     self.assertEqual(response.status, 200)
@@ -218,22 +217,21 @@ class CameraHttpTests(unittest.TestCase):
             backend = Backend()
             owner, last_seen = "controller", 123
         server = Server(("127.0.0.1", 0), Handler)
-        server.api, server.token = API(), "test-token"
+        server.api = API()
         worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=.02))
         worker.daemon = True
         worker.start()
         try:
-            cases = [("/camera/left_hand_camera.png", "bad-token", 401, "application/json"),
-                     ("/camera/unknown.png", "test-token", 404, "application/json"),
-                     ("/camera/head_camera.png", "test-token", 404, "application/json"),
-                     ("/camera/left_hand_camera.png", "test-token", 200, "image/png"),
-                     ("/camera/left_hand_camera.png", "test-token", 503, "application/json")]
-            for path, token, expected_status, content_type in cases:
+            cases = [("/camera/unknown.png", 404, "application/json"),
+                     ("/camera/head_camera.png", 404, "application/json"),
+                     ("/camera/left_hand_camera.png", 200, "image/png"),
+                     ("/camera/left_hand_camera.png", 503, "application/json")]
+            for path, expected_status, content_type in cases:
                 if expected_status == 503:
                     server.api.backend.error = RuntimeError("Camera unavailable")
                 connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
                 try:
-                    connection.request("GET", path, headers={"Authorization": "Bearer " + token})
+                    connection.request("GET", path)
                     response = connection.getresponse()
                     data = response.read()
                     self.assertEqual(response.status, expected_status)
