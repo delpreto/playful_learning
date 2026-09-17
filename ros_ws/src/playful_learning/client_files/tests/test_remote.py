@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from BaxterRemoteController_server import RemoteAPI, validate
+from BaxterRemoteController_client import BaxterRemoteController
 from remote_robot import BaxterBackend
 
 
@@ -211,6 +212,53 @@ class RobotAdapterTests(unittest.TestCase):
         self.backend.trajectory_results = {"left": None}
         self.backend.fault = None
         self.cancel = threading.Event()
+
+    def test_gripper_force_defaults_reach_sdk_from_browser_and_python_client(self):
+        c = self.backend.controller = Mock()
+        c.is_gripper_moving.return_value = False
+        c.is_gripper_grasping.return_value = False
+        # Use real SDK parameter/command semantics without ROS or physical motion.
+        gripper = Mock(_cmd_sender='test_%s', _cmd_sequence=0)
+        c._grippers = {'left': gripper, 'right': gripper}
+        def command_position(target, block=False):
+            gripper._cmd_sequence += 1
+            gripper._state = Mock(command_sender='test_go',
+                                  command_sequence=gripper._cmd_sequence)
+            c.get_gripper_position_open_percent.return_value = target
+        gripper.command_position.side_effect = command_position
+        def dispatch(method, **params):
+            validate(method, params)
+            return self.backend.execute(method, params, self.cancel)
+        client = BaxterRemoteController.__new__(BaxterRemoteController)
+        client._start = dispatch
+        cases = [('open_gripper', {}, 100, 75),
+                 ('close_gripper', {}, 0, 75),
+                 ('jog_gripper', {'delta_percent': 5}, 55, 75),
+                 ('move_gripper', {'gripper_open_percent': 80}, 80, 75),
+                 ('move_gripper', {'gripper_open_percent': 80,
+                                   'force_threshold_percent': 20}, 80, 20)]
+        for limb in ('left', 'right'):
+            for method, params, target, force in cases:
+                for use_client in (False, True):
+                    with self.subTest(limb=limb, method=method, force=force, client=use_client):
+                        gripper.reset_mock()
+                        c.get_gripper_position_open_percent.return_value = 50
+                        with patch('remote_robot.time', FakeClock()):
+                            result = (getattr(client, method)(limb, **params) if use_client
+                                      else dispatch(method, limb_name=limb, **params))
+                        self.assertEqual(result, target)
+                        gripper.set_parameters.assert_called_once_with(
+                            {'moving_force': force, 'holding_force': 15})
+                        gripper.command_position.assert_called_once_with(target, block=False)
+        c.move_gripper.assert_not_called()  # Its legacy 30% cap must not apply.
+
+    def test_gripper_moving_force_api_limits(self):
+        params = {'limb_name': 'left', 'gripper_open_percent': 100}
+        for force in (0, 30, 75):
+            validate('move_gripper', dict(params, force_threshold_percent=force))
+        for force in (-1, 75.1, 100, float('nan'), float('inf'), True):
+            with self.subTest(force=force), self.assertRaises(ValueError):
+                validate('move_gripper', dict(params, force_threshold_percent=force))
 
     def test_state_checks_trajectory_status_only_when_a_goal_exists(self):
         from unittest.mock import Mock

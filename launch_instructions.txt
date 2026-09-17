@@ -1,0 +1,15 @@
+
+ON CLIENT
+==============
+cd C:\Users\jdelp\Desktop\Playful-Robots\ros_ws\src\playful_learning\client_files
+py browser_interface\BaxterRemoteController_browserInterface.py --server http://192.168.0.180:8765 --port 8000
+
+
+ON SERVER
+==============
+rosrun baxter_interface joint_trajectory_action_server.py --limb both --mode position
+
+cd ~/ros_ws
+./baxter-jeff.sh
+cd ~/ros_ws/src/playful_learning
+python -B server_files/BaxterRemoteController_server.py --host 192.168.0.180 --port 8765

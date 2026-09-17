@@ -46,8 +46,8 @@ class Operation:
 class BaxterRemoteController:
     """A local-style API with explicit waits for motion and automatic heartbeats.
 
-    Motion methods return Operation; call .wait() to wait for the result. IK and
-    trajectory builders wait internally and return their result. Use a context
+    Motion methods return Operation; call .wait() to wait for the result. IK 
+    waits internally and returns the result. Use a context
     manager or close() to relinquish control and request cancellation on exit.
     Optional arguments in **options use the corresponding controller names.
     """
@@ -278,28 +278,8 @@ class BaxterRemoteController:
                            gripper_orientation_quaternion_wijk=gripper_orientation_quaternion_wijk,
                            seed_joint_angles_rad=seed_joint_angles_rad, **options).wait()
 
-    def build_trajectory_from_joint_angles(self, limb_name, times_from_start_s,
-                                          joint_angles_rad, **options):
-        return self._start("build_trajectory_from_joint_angles", limb_name=limb_name,
-                           times_from_start_s=times_from_start_s,
-                           joint_angles_rad=joint_angles_rad, **options).wait()
-
-    def build_trajectory_from_gripper_poses(self, limb_name, times_from_start_s,
-                                           gripper_positions_m,
-                                           gripper_orientations_quaternion_wijk, **options):
-        return self._start("build_trajectory_from_gripper_poses", limb_name=limb_name,
-                           times_from_start_s=times_from_start_s,
-                           gripper_positions_m=gripper_positions_m,
-                           gripper_orientations_quaternion_wijk=
-                           gripper_orientations_quaternion_wijk, **options).wait()
-
-    def run_trajectory(self, limb_names=None, **options):
-        return self._start("run_trajectory", limb_names=limb_names, **options)
-
-    def trajectory_succeeded(self, limb_name):
-        return self.call("trajectory_succeeded", limb_name=limb_name)
-
-    def move_gripper(self, limb_name, gripper_open_percent, force_threshold_percent=15):
+    def move_gripper(self, limb_name, gripper_open_percent, force_threshold_percent=75):
+        """Move with a 0-75% moving-force threshold; holding force stays at 15%."""
         return self._start("move_gripper", limb_name=limb_name,
                            gripper_open_percent=gripper_open_percent,
                            force_threshold_percent=force_threshold_percent)

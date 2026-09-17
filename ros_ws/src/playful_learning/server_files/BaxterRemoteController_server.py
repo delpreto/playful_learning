@@ -67,7 +67,7 @@ METHODS = {
     'build_trajectory_from_gripper_poses': (('limb_name', 'times_from_start_s', 'gripper_positions_m',
                                           'gripper_orientations_quaternion_wijk'),
                                          ('goal_time_tolerance_s', 'initial_seed_joint_angles_rad')),
-    'run_trajectory': ((), ('limb_names',)),
+    # 'run_trajectory': ((), ('limb_names',)),
     'move_gripper': (('limb_name', 'gripper_open_percent'), ('force_threshold_percent',)),
     'open_gripper': (('limb_name',), ()), 'close_gripper': (('limb_name',), ()),
     'jog_joint': (('limb_name', 'joint_name', 'delta_rad'), ()),
@@ -157,7 +157,7 @@ def validate(method, p):
             raise ValueError('limb_names must be a nonempty list of left/right')
     for name, low, high in [('timeout_s', 0.1, 120), ('tolerance_rad', 0.0001, 0.1),
                             ('goal_time_tolerance_s', 0, 10), ('gripper_open_percent', 0, 100),
-                            ('force_threshold_percent', 0, 30)]:
+                            ('force_threshold_percent', 0, 75)]:
         if name in p and (not finite_number(p[name]) or not low <= p[name] <= high):
             raise ValueError('%s must be between %s and %s' % (name, low, high))
     for name in ('joint_angles_rad_byLimb', 'seed_joint_angles_rad_byLimb',

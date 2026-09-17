@@ -264,7 +264,11 @@ Nm, endpoint positions are meters in Baxter's `base` frame, and quaternions are
 `[w, x, y, z]`. `get_end_effector_poses()` returns, for each arm,
 `{"position_m": [x, y, z], "orientation_wijk": [w, x, y, z]}`.
 Gripper position and force use the SDK's 0–100 percentages.
-The remote API limits requested gripper force to 30% (default 15%).
+The remote API defaults to a 75% moving-force threshold for both grippers,
+including browser open/close/jog commands and Python client calls. `move_gripper`
+accepts an explicit `force_threshold_percent` from 0 to 75. Holding force stays
+at 15%, independently of the moving threshold. The remote adapter configures the
+SDK directly; the original `BaxterController.py` limits are unchanged.
 
 Additional jog calls are:
 

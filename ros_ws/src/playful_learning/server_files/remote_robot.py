@@ -249,7 +249,11 @@ class BaxterBackend(object):
                 if cancel.is_set():
                     raise RuntimeError('Cancelled')
                 before = gripper._state
-                c.move_gripper(limb, target, p.get('force_threshold_percent', 15))
+                # The legacy controller caps both forces at 30%; configure the
+                # SDK here so the remote moving threshold is independent of hold.
+                gripper.set_parameters({'moving_force': p.get('force_threshold_percent', 75),
+                                        'holding_force': 15})
+                gripper.command_position(target, block=False)
                 sequence = gripper._cmd_sequence
             # Confirm this command, not a cached idle/grasp from a previous command.
             started = time.time()

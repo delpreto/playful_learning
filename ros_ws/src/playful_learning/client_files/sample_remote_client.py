@@ -54,29 +54,6 @@ with BaxterRemoteController(SERVER_URL) as robot:
     print("Before orientation jog:", robot.get_end_effector_poses()["left"])
     robot.jog_endpoint("left", "yaw", 0.01).wait()
 
-    # Build a two-waypoint joint trajectory from the measured joint angles.
-    joints = robot.get_joint_angles_rad()["left"]
-    next_joints = joints.copy()
-    next_joints["left_w2"] += 0.01
-    robot.build_trajectory_from_joint_angles(
-        "left", [1.0, 3.0], [joints, next_joints])
-    robot.run_trajectory(["left"]).wait()
-    print("Joint trajectory succeeded:", robot.trajectory_succeeded("left"))
-
-    # Build a 2 mm end-effector trajectory, with IK seeded from measured joints.
-    joints = robot.get_joint_angles_rad()["left"]
-    pose = robot.get_end_effector_poses()["left"]
-    next_position = pose["position_m"][:]
-    next_position[0] += 0.002
-    built = robot.build_trajectory_from_gripper_poses(
-        "left", [1.0, 3.0], [pose["position_m"], next_position],
-        [pose["orientation_wijk"], pose["orientation_wijk"]],
-        initial_seed_joint_angles_rad=joints)
-    if not built:
-        raise RuntimeError("No IK solution; do not run the previously built trajectory")
-    robot.run_trajectory(["left"]).wait()
-    print("Pose trajectory succeeded:", robot.trajectory_succeeded("left"))
-
     opening = robot.get_gripper_position_open_percent("left")
     robot.move_gripper("left", max(0, opening - 1), force_threshold_percent=15).wait()
     print("Before gripper jog:", robot.get_gripper_position_open_percent("left"))
