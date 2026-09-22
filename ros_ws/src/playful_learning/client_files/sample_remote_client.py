@@ -54,6 +54,8 @@ with BaxterRemoteController(SERVER_URL) as robot:
     print("Before orientation jog:", robot.get_end_effector_poses()["left"])
     robot.jog_endpoint("left", "yaw", 0.01).wait()
 
+    # Calibration moves the fingers through their range; leave this gripper empty.
+    robot.calibrate_gripper("right").wait()
     opening = robot.get_gripper_position_open_percent("left")
     robot.move_gripper("left", max(0, opening - 1), force_threshold_percent=15).wait()
     print("Before gripper jog:", robot.get_gripper_position_open_percent("left"))

@@ -82,7 +82,7 @@ class BaxterController:
     self._trajectory_thread = OrderedDict()
     self._trajectories = OrderedDict()
     self._grippers = OrderedDict()
-    self._max_gripper_force_percent = 30
+    self._max_gripper_force_percent = 40
     for limb_name in self._limb_names:
       self._limbs[limb_name] = baxter_interface.Limb(limb_name)
       self._joint_names[limb_name] = self.prepend_limb_name(limb_name, self._joint_names_noLimb)
@@ -720,6 +720,9 @@ class BaxterController:
 
   def open_gripper(self, limb_name):
     self.move_gripper(limb_name, gripper_open_percent=100)
+  
+  def calibrate_gripper(self, limb_name):
+    self._grippers[limb_name].calibrate()
 
   def get_gripper_position_open_percent(self, limb_name):
     return self._grippers[limb_name].position()

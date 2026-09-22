@@ -278,6 +278,10 @@ class BaxterRemoteController:
                            gripper_orientation_quaternion_wijk=gripper_orientation_quaternion_wijk,
                            seed_joint_angles_rad=seed_joint_angles_rad, **options).wait()
 
+    def calibrate_gripper(self, limb_name):
+        """Calibrate one gripper; moves its fingers. Wait for verified success."""
+        return self._start("calibrate_gripper", limb_name=limb_name)
+
     def move_gripper(self, limb_name, gripper_open_percent, force_threshold_percent=75):
         """Move with a 0-75% moving-force threshold; holding force stays at 15%."""
         return self._start("move_gripper", limb_name=limb_name,

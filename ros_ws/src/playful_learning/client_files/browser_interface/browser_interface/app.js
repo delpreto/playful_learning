@@ -123,7 +123,7 @@ for (const limb of ["left", "right"]) {
     view.gripperForceBar = element("span", "", undefined, element("div", "gripper-meter gripper-force", undefined, force));
     addJogButtons(gripperContent, limb, "gripper");
     const gripperActions = element("div", "gripper-actions", undefined, gripper);
-    for (const [action, label] of [["open", "Open (100%)"], ["close", "Close (0%)"]]) {
+    for (const [action, label] of [["open", "Open (100%)"], ["close", "Close (0%)"], ["calibrate", "Calibrate"]]) {
         const button = element("button", "gripper-button", label, gripperActions);
         button.type = "button";
         button.disabled = true;
@@ -131,6 +131,7 @@ for (const limb of ["left", "right"]) {
         button.dataset.gripperAction = action;
         button.setAttribute("aria-label", label + " " + limb + " gripper");
     }
+    element("p", "scale-note", "Calibration moves the fingers; empty the gripper first.", gripper);
 }
 
 async function rpc(method, params) {

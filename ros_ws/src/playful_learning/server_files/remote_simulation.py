@@ -147,6 +147,11 @@ class SimulationBackend(object):
         names = [limb + "_" + name for name in ("s0", "s1", "e0", "e1", "w0", "w1", "w2")] if limb else []
         angles, poses, grippers = {}, {}, {}
 
+        if method == 'calibrate_gripper':
+            # Illustrate the finger travel; this does not model hardware calibration.
+            self._animate({}, {}, {limb: 0.0}, cancel_event, duration=.3)
+            return self._animate({}, {}, {limb: 100.0}, cancel_event, duration=.3)
+
         if method in ('set_head_pan_rad', 'nod_head'):
             field = 'panning' if method == 'set_head_pan_rad' else 'nodding'
             began = time.time()

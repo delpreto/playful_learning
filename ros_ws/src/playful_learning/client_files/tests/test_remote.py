@@ -104,6 +104,20 @@ class RemoteOperationTests(unittest.TestCase):
         self.api.call("stop_gripper", {"limb_name": "left"}, "client-a", "stop")
         self.assertFalse(self.backend.cancel.is_set())
 
+    def test_calibration_is_deduplicated_and_cancelled_on_lease_expiry(self):
+        params = {'limb_name': 'right'}
+        accepted = self.api.call('calibrate_gripper', params, 'client-a', 'calibrate-1')
+        self.assertTrue(self.backend.started.wait(1))
+        self.assertEqual(self.api.call('calibrate_gripper', params, 'client-a', 'calibrate-1'), accepted)
+        self.assertEqual(self.backend.calls, 1)
+        with self.api.lock:
+            self.api.last_seen = time.time() - self.api.lease_timeout - 1
+        self.assertTrue(self.backend.stopped.wait(1))
+        self.assertTrue(self.backend.cancel.is_set())
+        self.assertIsNotNone(self.api.active)
+        self.backend.finish.set()
+        self.assertEqual(self.wait_result(accepted)['status'], 'cancelled')
+
     def test_stale_robot_feedback_cancels_even_with_connected_client(self):
         self.start_move()
         self.backend.state = lambda: {'movement_in_progress': {'left': False, 'right': False},

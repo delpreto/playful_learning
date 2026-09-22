@@ -239,6 +239,32 @@ class BaxterBackend(object):
                 raise RuntimeError('Trajectory cancelled or failed; inspect the local ROS log')
             return True
 
+        if method == 'calibrate_gripper':
+            gripper = c._grippers[limb]
+            if cancel.is_set():
+                raise RuntimeError('Cancelled before calibration')
+            if gripper.type() != 'electric':
+                raise ValueError('Calibration requires an electric gripper')
+            # The SDK call blocks and can republish calibration commands. Keep
+            # reads/Stop responsive, then send a final stop if it was cancelled.
+            before = gripper._state
+            try:
+                c.calibrate_gripper(limb)
+                if cancel.is_set():
+                    raise RuntimeError('Cancelled')
+                # BaxterController does not return the SDK's success value.
+                fresh = (gripper._state is not before and
+                         time.time() - self.feedback.get(limb + '_gripper', 0) <= 2)
+                calibrated, ready, error = gripper.calibrated(), gripper.ready(), gripper.error()
+                if not fresh or not calibrated or not ready or error or gripper.moving():
+                    raise RuntimeError('%s gripper calibration failed: calibrated=%s, ready=%s, error=%s, '
+                                       'fresh_feedback=%s' % (limb, calibrated, ready, error, fresh))
+            except Exception:
+                # A failed SDK wait does not itself stop the physical gripper.
+                gripper.stop(block=False)
+                raise
+            return True
+
         if method in ('move_gripper', 'open_gripper', 'close_gripper', 'jog_gripper'):
             target = p.get('gripper_open_percent', 100 if method == 'open_gripper' else 0)
             if method == 'jog_gripper':

@@ -70,11 +70,12 @@ METHODS = {
     # 'run_trajectory': ((), ('limb_names',)),
     'move_gripper': (('limb_name', 'gripper_open_percent'), ('force_threshold_percent',)),
     'open_gripper': (('limb_name',), ()), 'close_gripper': (('limb_name',), ()),
+    'calibrate_gripper': (('limb_name',), ()),
     'jog_joint': (('limb_name', 'joint_name', 'delta_rad'), ()),
     'jog_endpoint': (('limb_name', 'axis', 'delta'), ()),
     'jog_gripper': (('limb_name', 'delta_percent'), ())}
 OPERATIONS = set(name for name in METHODS if name.startswith(('move_', 'build_', 'jog_')))
-OPERATIONS.update(('run_trajectory', 'open_gripper', 'close_gripper',
+OPERATIONS.update(('run_trajectory', 'open_gripper', 'close_gripper', 'calibrate_gripper',
                    'get_joint_angles_rad_for_gripper_pose'))
 HEAD_MOTIONS = set(('set_head_pan_rad', 'nod_head'))
 HEAD_OPERATIONS = HEAD_MOTIONS | set(('set_halo_led', 'set_sonar_leds',
@@ -290,7 +291,7 @@ class RemoteAPI(object):
                 affected = self.active and (limb is None or limb in self.active['limbs'])
                 gripper_only = method == 'stop_gripper'
                 if affected and (not gripper_only or self.active['method'] in
-                                 ('move_gripper', 'open_gripper', 'close_gripper', 'jog_gripper')):
+                                 ('move_gripper', 'open_gripper', 'close_gripper', 'jog_gripper', 'calibrate_gripper')):
                     self.active['cancel'].set()
                     self.backend.stop(None if limb is None else self.active['limbs'], gripper_only=gripper_only)
                 else:

@@ -32,8 +32,8 @@ HTTP traffic is unencrypted.
 | `sample_remote_client.py` | Short programmatic example | 3.8+ |
 | `browser_interface/BaxterRemoteController_browserInterface.py`, `browser_interface/browser_interface/` | Local browser server and assets, inside `client_files/` | 3.8+ |
 
-`BaxterController.py`, `BaxterTrajectory.py`, and `helpers.py` are unchanged. The
-adapter confines necessary access to the controller's private SDK objects to one
+The adapter calls `BaxterController.calibrate_gripper(limb_name)` for calibration
+and confines necessary access to the controller's private SDK objects to one
 new module, including endpoint reads, cancellation, and trajectory completion
 checks. The remote service owns one controller instance; avoid simultaneously
 running another program that commands the same robot.
@@ -87,8 +87,10 @@ also keep `server_files/` beside `client_files/`. The original robot modules are
 unnecessary when connecting the client to the real server.
 
 Use the controller modules from this same project revision on the old desktop;
-the adapter reads a few SDK/controller internals. No edits to those modules are
-needed for this remote interface.
+the adapter reads a few SDK/controller internals. For gripper calibration, copy
+the updated `BaxterController.py` containing `calibrate_gripper` along with the
+updated server and adapter, then restart the server. Restart the browser launcher
+and refresh the page after updating the client files.
 
 These scripts run directly with Python. No new catkin package, `catkin_make`,
 `rosrun` registration, or ROS installation on the new computer is required. The
@@ -127,7 +129,7 @@ python2.7 -B BaxterRemoteController_server.py --host 192.168.1.50 --port 8765
 Replace `192.168.1.50` with the old desktop's actual router-facing IP. The default
 host is `127.0.0.1`, which only permits connections from the same computer.
 **Starting the real server constructs BaxterController, enables Baxter, and
-calibrates its grippers**, following the existing controller's initialization.
+attempts to calibrate its grippers**, following the existing controller's initialization.
 Have the robot workspace clear before starting it.
 
 If Ubuntu's firewall is enabled, permit TCP 8765 from the new computer's address.
@@ -195,6 +197,7 @@ by name. The server rejects unknown methods and unsupported arguments.
 | Head pan/nod, lights, screen color/image commands | `Operation` |
 | `move_to_joint_angles_rad`, `move_to_neutral`, `move_to_resting`, `move_to_gripper_pose` | `Operation` |
 | `move_gripper`, `open_gripper`, `close_gripper`, the three jog methods | `Operation` |
+| `calibrate_gripper(limb_name)` | `Operation`; `.wait()` returns `True` after calibration is verified |
 | `run_trajectory(limb_names=None)` | `Operation` |
 | `get_joint_angles_rad_for_gripper_pose(...)` | Joint solution or `None`; waits internally |
 | The two `build_trajectory_...(...)` methods | Build result; waits internally |
@@ -269,6 +272,25 @@ including browser open/close/jog commands and Python client calls. `move_gripper
 accepts an explicit `force_threshold_percent` from 0 to 75. Holding force stays
 at 15%, independently of the moving threshold. The remote adapter configures the
 SDK directly; the original `BaxterController.py` limits are unchanged.
+
+To calibrate one gripper, use `"left"` or `"right"`:
+
+```python
+robot.calibrate_gripper("right").wait()
+```
+
+Calibration moves the fingers through their range, so leave the gripper empty.
+It uses the controller's existing SDK calibration timeout and is never retried
+automatically. The operation succeeds only when gripper feedback reports
+calibrated, ready, and no error; otherwise `.wait()` raises `RemoteError`.
+Increasing the client's `.wait(timeout_s=...)` does not extend SDK calibration.
+Clearing an earlier calibration or resetting a gripper error can add time before
+the SDK's calibration wait. State reads and stop requests remain available while
+it runs. The blocking SDK call may continue until it returns after a stop request;
+the adapter then sends another stop and reports the operation as cancelled.
+Calibration success requires fresh feedback, including confirmation that the
+gripper has stopped. No new commands are accepted until the operation finishes.
+Calibration uses the same control ownership and busy checks as gripper movement.
 
 Additional jog calls are:
 
@@ -433,8 +455,10 @@ rotation, and grippers, plus Neutral and Resting pose buttons for each arm and a
 stop control. Enable the Control buttons toggle to use them; each pose button
 moves only its arm and waits for the current command to finish before another
 can be sent. Trajectory building remains in the Python API.
-Each gripper also has **Open (100%)** and **Close (0%)** buttons alongside its
-jog controls. These use the same control toggle and wait for each operation to finish.
+Each gripper also has **Calibrate**, **Open (100%)**, and **Close (0%)** buttons
+alongside its jog controls. These use the same control toggle and wait for each
+operation to finish. Calibrate moves that gripper's fingers and reports a failure
+if calibration is not confirmed by feedback.
 
 After an ordinary command failure, the error stays visible and controls become
 available again once a subsequent state update confirms fresh, idle, fault-free
