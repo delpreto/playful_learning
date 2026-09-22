@@ -10,6 +10,8 @@
 *.pyc
 *.*~
 
+*.csv
+
 ros_ws/install/
 ros_ws/build/
 ros_ws/devel/
@@ -17,3 +19,4 @@ ros_ws/devel/
 **/*archived*/
 
 various/
+
