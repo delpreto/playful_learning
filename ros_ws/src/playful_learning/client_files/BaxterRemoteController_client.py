@@ -1,12 +1,193 @@
 """Small Python 3 client for BaxterRemoteController_server.py (standard library only)."""
 
 import base64
+import csv
+from datetime import datetime, timezone
+from functools import wraps
+import hashlib
+import inspect
 import json
+import os
+from pathlib import Path
+import struct
 import threading
 import time
 import uuid
+import warnings
+import zlib
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+_LOG_LOCK = threading.RLock()
+_LOG_CONTEXT = threading.local()
+
+
+class _History:
+    """Append-only CSV; image references are relative to this directory."""
+
+    def __init__(self, directory):
+        self.directory = Path(directory).resolve()
+
+    def _asset(self, data, suffix):
+        relative = "images/" + hashlib.sha256(data).hexdigest() + suffix
+        target = self.directory / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            temporary = target.with_name(uuid.uuid4().hex + ".tmp")
+            try:
+                temporary.write_bytes(data)
+                os.replace(str(temporary), str(target))
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+        return relative
+
+    def value(self, value):
+        if isinstance(value, Operation):
+            return {"operation_id": value.operation_id}
+        if isinstance(value, dict):
+            value = dict(value)
+            width, height = value.get("width"), value.get("height")
+            key = "rgb_data" if "rgb_data" in value else "rgb_base64"
+            if type(width) is int and type(height) is int and key in value:
+                raw = value[key]
+                if key == "rgb_base64":
+                    try:
+                        raw = base64.b64decode(raw, validate=True)
+                    except (ValueError, TypeError):
+                        pass
+                if isinstance(raw, (bytes, bytearray)) and 0 < width <= 1024 and \
+                        0 < height <= 600 and len(raw) == width * height * 3:
+                    def chunk(kind, data):
+                        return (struct.pack("!I", len(data)) + kind + data +
+                                struct.pack("!I", zlib.crc32(kind + data) & 0xffffffff))
+                    scanlines = b"".join(b"\0" + raw[y:y + width * 3]
+                                         for y in range(0, len(raw), width * 3))
+                    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!2I5B", width,
+                           height, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(scanlines)) +
+                           chunk(b"IEND", b""))
+                    value[key] = self._asset(png, ".png")
+            if isinstance(value.get("image_file"), (str, os.PathLike)):
+                source = Path(value["image_file"])
+                if source.is_file():
+                    value["image_file"] = {"source": str(source),
+                                          "path": self._asset(source.read_bytes(), source.suffix)}
+            return {str(key): self.value(item) for key, item in value.items()}
+        if isinstance(value, (bytes, bytearray)):
+            data = bytes(value)
+            suffix = ".png" if data.startswith(b"\x89PNG\r\n\x1a\n") else \
+                     ".jpg" if data.startswith(b"\xff\xd8\xff") else ".bin"
+            return self._asset(data, suffix)
+        if isinstance(value, (list, tuple)):
+            return [self.value(item) for item in value]
+        if isinstance(value, Path):
+            return str(value)
+        if value is None or isinstance(value, (str, bool, int, float)):
+            return value
+        return "<%s.%s>" % (type(value).__module__, type(value).__qualname__)
+
+    def append(self, row):
+        self.directory.mkdir(parents=True, exist_ok=True)
+        # A stuck logger must not delay heartbeats beyond the robot's lease.
+        deadline = time.monotonic() + 0.1
+        if not _LOG_LOCK.acquire(timeout=0.1):
+            raise TimeoutError("Interface history lock is busy")
+        try:
+            with (self.directory / ".lock").open("a+b") as lock:
+                if os.name == "nt":
+                    import msvcrt
+                    if lock.seek(0, 2) == 0:
+                        lock.write(b"\0")
+                        lock.flush()
+                    lock.seek(0)
+                else:
+                    import fcntl
+                while True:
+                    try:
+                        if os.name == "nt":
+                            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                        else:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("Interface history lock is busy")
+                        time.sleep(0.005)
+                try:
+                    with (self.directory / "robot_interface_log.csv").open(
+                            "a", newline="", encoding="utf-8") as stream:
+                        writer = csv.DictWriter(stream, fieldnames=list(row))
+                        if stream.tell() == 0:
+                            writer.writeheader()
+                        writer.writerow(row)
+                finally:
+                    if os.name == "nt":
+                        lock.seek(0)
+                        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(lock, fcntl.LOCK_UN)
+        finally:
+            _LOG_LOCK.release()
+
+
+def _log_warning(error):
+    # Logging must never turn an accepted robot command into a retryable error.
+    try:
+        warnings.warn("Baxter interface history could not be written: %s" % error, RuntimeWarning)
+    except Exception:
+        pass
+
+
+def _logged(method):
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        client = self.client if isinstance(self, Operation) else self
+        started, tick = time.time(), time.monotonic()
+        call_id, parent_id = uuid.uuid4().hex, getattr(_LOG_CONTEXT, "call_id", "")
+        _LOG_CONTEXT.call_id = call_id
+        result, error = None, None
+        try:
+            arguments = dict(signature.bind(self, *args, **kwargs).arguments)
+            arguments.pop("self")
+        except TypeError:
+            arguments = {"args": args, "kwargs": kwargs}
+        if isinstance(self, Operation):
+            arguments["operation_id"] = self.operation_id
+        history = getattr(client, "_history", None)
+        if history is not None:
+            try:
+                arguments = history.value(arguments)
+            except Exception as failure:
+                _log_warning(failure)
+        try:
+            result = method(self, *args, **kwargs)
+            return result
+        except BaseException as failure:
+            error = {"type": type(failure).__name__, "message": str(failure)}
+            raise
+        finally:
+            finished, duration = time.time(), time.monotonic() - tick
+            _LOG_CONTEXT.call_id = parent_id
+            try:
+                history = getattr(client, "_history", None)
+                if history is not None:
+                    history.append({
+                        "epoch_timestamp": started,
+                        "timestamp_utc": datetime.fromtimestamp(started, timezone.utc).isoformat(),
+                        "completed_epoch_timestamp": finished, "duration_s": duration,
+                        "client_id": getattr(client, "client_id", ""),
+                        "call_id": call_id, "parent_call_id": parent_id,
+                        "method": method.__qualname__,
+                        "arguments": json.dumps(history.value(arguments)),
+                        "responses": json.dumps(history.value(result)),
+                        "error": json.dumps(error),
+                    })
+            except Exception as failure:
+                _log_warning(failure)
+    return wrapper
 
 
 class RemoteError(RuntimeError):
@@ -50,9 +231,18 @@ class BaxterRemoteController:
     waits internally and returns the result. Use a context
     manager or close() to relinquish control and request cancellation on exit.
     Optional arguments in **options use the corresponding controller names.
+    Public calls (including nested RPCs, heartbeats and Operation waits) append
+    timestamped arguments/results to log_dir/robot_interface_log.csv. Images
+    are deduplicated in log_dir/images; logging failures only emit warnings.
     """
 
-    def __init__(self, server, request_timeout_s=3, heartbeat=True):
+    def __init__(self, server, request_timeout_s=3, heartbeat=True, *,
+                 log_dir="robot_interface_log"):
+        try:
+            self._history = _History(log_dir)
+        except Exception as error:
+            self._history = None
+            _log_warning(error)
         self.url = server.rstrip("/")
         if not self.url.endswith("/rpc"):
             self.url += "/rpc"
@@ -319,3 +509,11 @@ class BaxterRemoteController:
 
     def jog_gripper(self, limb_name, delta_percent):
         return self._start("jog_gripper", limb_name=limb_name, delta_percent=delta_percent)
+
+
+# Centralized instrumentation keeps the public API and its execution unchanged.
+for _class in (BaxterRemoteController, Operation):
+    for _name, _method in list(vars(_class).items()):
+        if callable(_method) and (not _name.startswith("_") or
+                                 (_class is BaxterRemoteController and _name == "__init__")):
+            setattr(_class, _name, _logged(_method))
